@@ -7,10 +7,12 @@ import REPL:
 import Base:
     BIG_STACKTRACE_SIZE,
     catch_stack,
+    CodeInfo,
     contractuser,
     empty_sym,
     invokelatest,
     printstyled,
+    MethodInstance,
     scrub_repl_backtrace,
     show,
     showerror,
@@ -222,9 +224,14 @@ function print_stackframe(io, i, frame::StackFrame, n::Int, digit_align_width, m
     print(io, " ", lpad("[" * string(i) * "]", digit_align_width + 2))
     print(io, " ")
 
-    StackTraces.show_spec_linfo(IOContext(io, :backtrace=>true), frame)
+    StackTraces.show_spec_linfo(IOContext(io, :backtrace=>true), frame, compacttrace)
     if n > 1
         printstyled(io, " (repeats $n times)"; color=:light_black)
+    end
+
+    if !compacttrace
+        println(io)
+        print(io, " " ^ (digit_align_width + 1))
     end
 
     # @
