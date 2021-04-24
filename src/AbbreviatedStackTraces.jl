@@ -253,7 +253,7 @@ function print_stackframe(io, i, frame::StackFrame, n::Int, digit_align_width, m
 end
 
 #copied from stacktraces.jl to add compact option
-function show_spec_linfo(io::IO, frame::StackFrame, compacttrace = true)
+function show_spec_linfo(io::IO, frame::StackFrame, compacttrace = false)
     linfo = frame.linfo
     if linfo === nothing || compacttrace
         if frame.func === empty_sym
