@@ -7,6 +7,8 @@ import REPL:
 import Base:
     BIG_STACKTRACE_SIZE,
     catch_stack,
+    contractuser,
+    empty_sym,
     invokelatest,
     printstyled,
     scrub_repl_backtrace,
@@ -16,6 +18,8 @@ import Base:
     show_exception_stack,
     show_full_backtrace,
     StackFrame,
+    stacktrace_contract_userdir,
+    stacktrace_expand_basepaths,
     STACKTRACE_FIXEDCOLORS,
     STACKTRACE_MODULECOLORS,
     stacktrace_linebreaks,
@@ -23,7 +27,9 @@ import Base:
     process_backtrace
 
 import Base.StackTraces:
-    is_top_level_frame
+    is_top_level_frame,
+    show_spec_linfo,
+    top_level_scope_sym
 
 is_base_not_REPL(path) = startswith(path, r".[/\\]") && !startswith(path, r".[/\\]REPL")
 is_registry_pkg(path) = contains(path, r"[/\\].julia[/\\]packages[/\\]")
@@ -83,7 +89,7 @@ function show_compact_backtrace(io::IO, trace::Vector; print_linebreaks::Bool)
                 print_omitted_modules(lasti + 1, i - 1)
                 println(io, repeat(' ', ndigits_max + 2) * "⋮")
             end
-            print_stackframe(io, i, trace[i][1], trace[i][2], ndigits_max, modulecolordict, modulecolorcycler)
+            print_stackframe(io, i, trace[i][1], trace[i][2], ndigits_max, modulecolordict, modulecolorcycler, true)
             if i < num_frames
                 println(io)
                 print_linebreaks && println(io)
@@ -192,6 +198,101 @@ function show_backtrace(io::IO, t::Vector, compacttrace = false)
         show_full_backtrace(io, filtered; print_linebreaks = stacktrace_linebreaks())
     end
     return
+end
+function print_stackframe(io, i, frame::StackFrame, n::Int, digit_align_width, modulecolordict, modulecolorcycler, compacttrace = false)
+    m = Base.parentmodule(frame)
+    modulecolor = get_modulecolor!(modulecolordict, m, modulecolorcycler)
+    print_stackframe(io, i, frame, n, digit_align_width, modulecolor; compacttrace)
+end
+function print_stackframe(io, i, frame::StackFrame, n::Int, digit_align_width, modulecolor; compacttrace = false)
+    file, line = string(frame.file), frame.line
+    stacktrace_expand_basepaths() && (file = something(find_source_file(file), file))
+    stacktrace_contract_userdir() && (file = contractuser(file))
+
+    # Used by the REPL to make it possible to open
+    # the location of a stackframe/method in the editor.
+    if haskey(io, :last_shown_line_infos)
+        push!(io[:last_shown_line_infos], (string(frame.file), frame.line))
+    end
+
+    inlined = getfield(frame, :inlined)
+    modul = parentmodule(frame)
+
+    # frame number
+    print(io, " ", lpad("[" * string(i) * "]", digit_align_width + 2))
+    print(io, " ")
+
+    StackTraces.show_spec_linfo(IOContext(io, :backtrace=>true), frame)
+    if n > 1
+        printstyled(io, " (repeats $n times)"; color=:light_black)
+    end
+
+    # @
+    printstyled(io, " " * "@ ", color = :light_black)
+
+    # module
+    if modul !== nothing
+        printstyled(io, modul, color = modulecolor)
+        print(io, " ")
+    end
+
+    # filepath
+    pathparts = splitpath(file)
+    folderparts = pathparts[1:end-1]
+    if !isempty(folderparts)
+        printstyled(io, joinpath(folderparts...) * (Sys.iswindows() ? "\\" : "/"), color = :light_black)
+    end
+
+    # filename, separator, line
+    # use escape codes for formatting, printstyled can't do underlined and color
+    # codes are bright black (90) and underlined (4)
+    printstyled(io, pathparts[end], ":", line; color = :light_black, underline = true)
+
+    # inlined
+    printstyled(io, inlined ? " [inlined]" : "", color = :light_black)
+end
+
+#copied from stacktraces.jl to add compact option
+function show_spec_linfo(io::IO, frame::StackFrame, compacttrace = true)
+    linfo = frame.linfo
+    if linfo === nothing || compacttrace
+        if frame.func === empty_sym
+            print(io, "ip:0x", string(frame.pointer, base=16))
+        elseif frame.func === top_level_scope_sym
+            print(io, "top-level scope")
+        else
+            Base.print_within_stacktrace(io, Base.demangle_function_name(string(frame.func)), bold=true)
+        end
+    elseif linfo isa MethodInstance
+        def = linfo.def
+        if isa(def, Method)
+            sig = linfo.specTypes
+            argnames = Base.method_argnames(def)
+            if def.nkw > 0
+                # rearrange call kw_impl(kw_args..., func, pos_args...) to func(pos_args...)
+                kwarg_types = Any[ fieldtype(sig, i) for i = 2:(1+def.nkw) ]
+                uw = Base.unwrap_unionall(sig)::DataType
+                pos_sig = Base.rewrap_unionall(Tuple{uw.parameters[(def.nkw+2):end]...}, sig)
+                kwnames = argnames[2:(def.nkw+1)]
+                for i = 1:length(kwnames)
+                    str = string(kwnames[i])::String
+                    if endswith(str, "...")
+                        kwnames[i] = Symbol(str[1:end-3])
+                    end
+                end
+                Base.show_tuple_as_call(io, def.name, pos_sig;
+                                        demangle=true,
+                                        kwargs=zip(kwnames, kwarg_types),
+                                        argnames=argnames[def.nkw+2:end])
+            else
+                Base.show_tuple_as_call(io, def.name, sig; demangle=true, argnames)
+            end
+        else
+            Base.show_mi(io, linfo, true)
+        end
+    elseif linfo isa CodeInfo
+        print(io, "top-level scope")
+    end
 end
 
 #copied from task.jl with added compacttrace argument
